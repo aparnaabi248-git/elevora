@@ -17,8 +17,9 @@ const {
  * and never fabricate analysis data when Gemini fails.
  */
 const mapAIErrorToResponse = (error, fallbackMessage) => {
-  const code = error.code || 'AI_FAILED';
-  const status = error.status || 500;
+  const normalizedError = error && typeof error === 'object' ? error : { message: String(error || fallbackMessage || 'Internal Server Error') };
+  const code = normalizedError.code || 'AI_FAILED';
+  const status = normalizedError.status || 500;
 
   switch (code) {
     case 'GEMINI_OVERLOADED':
@@ -50,7 +51,7 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         status: 500,
         body: {
           code,
-          message: error.message || 'The configured AI model is unsupported. Please contact support.'
+          message: normalizedError.message || 'The configured AI model is unsupported. Please contact support.'
         }
       };
     case 'GEMINI_MODEL_MISCONFIGURED':
@@ -82,7 +83,7 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         status: 400,
         body: {
           code,
-          message: error.message || 'The AI service rejected this request. Try a different file or shorter input.'
+          message: normalizedError.message || 'The AI service rejected this request. Try a different file or shorter input.'
         }
       };
     case 'ANALYSIS_SAVE_FAILED':
@@ -90,7 +91,7 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         status: 500,
         body: {
           code,
-          message: error.message || 'Your resume was analyzed but the result could not be saved. Please try again.'
+          message: normalizedError.message || 'Your resume was analyzed but the result could not be saved. Please try again.'
         }
       };
     case 'INVALID_RESUME_FILE':
@@ -98,7 +99,7 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         status: 400,
         body: {
           code,
-          message: error.message || 'Invalid resume file. Please upload a valid PDF or DOCX resume.'
+          message: normalizedError.message || 'Invalid resume file. Please upload a valid PDF or DOCX resume.'
         }
       };
     case 'NOT_FOUND':
@@ -106,7 +107,7 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         status: 404,
         body: {
           code,
-          message: error.message || 'Requested resource not found.'
+          message: normalizedError.message || 'Requested resource not found.'
         }
       };
     default:
