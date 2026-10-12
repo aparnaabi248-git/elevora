@@ -6,9 +6,21 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 // so it must not be used as the default.
 const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
 
+// Second supported model, tried only when the primary model fails with a
+// retryable service error (overload/rate-limit). Override with
+// GEMINI_FALLBACK_MODEL. Never fabricated analysis — if both fail, we throw.
+const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-1.5-flash';
+
 const getGeminiModelName = () => {
   const configured = process.env.GEMINI_MODEL?.trim();
   return configured || DEFAULT_GEMINI_MODEL;
+};
+
+const getGeminiFallbackModelName = () => {
+  const configured = process.env.GEMINI_FALLBACK_MODEL?.trim();
+  const fallback = configured || DEFAULT_GEMINI_FALLBACK_MODEL;
+  // No fallback when it duplicates the primary model.
+  return fallback === getGeminiModelName() ? null : fallback;
 };
 
 let genAI = null;
@@ -44,6 +56,8 @@ const resetGeminiClient = () => {
 module.exports = {
   getGeminiClient,
   getGeminiModelName,
+  getGeminiFallbackModelName,
   resetGeminiClient,
-  DEFAULT_GEMINI_MODEL
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_FALLBACK_MODEL
 };

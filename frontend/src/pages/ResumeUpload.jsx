@@ -18,7 +18,7 @@ const getFriendlyUploadError = (err) => {
 
   switch (code) {
     case 'GEMINI_OVERLOADED':
-      return 'The AI service is temporarily overloaded. Please wait a moment and try again.';
+      return 'The AI service is still overloaded after several attempts. Please try again in a few minutes.';
     case 'GEMINI_RATE_LIMITED':
       return 'Too many AI requests right now. Please wait a minute and try again.';
     case 'GEMINI_AUTH':
@@ -34,7 +34,7 @@ const getFriendlyUploadError = (err) => {
       break;
   }
 
-  if (status === 503) return 'The AI service is temporarily overloaded. Please try again in a moment.';
+  if (status === 503) return 'The AI service is still overloaded after several attempts. Please try again in a few minutes.';
   if (status === 429) return 'Too many requests right now. Please wait a minute and try again.';
   if (status === 400) return serverMessage || 'Invalid resume file. Please upload a valid PDF or DOCX resume.';
   return serverMessage || 'Resume upload or analysis failed. Try again.';

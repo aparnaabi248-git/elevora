@@ -26,7 +26,7 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         status: 503,
         body: {
           code,
-          message: 'The AI service is temporarily overloaded. Please try again in a moment.'
+          message: 'The AI service is still overloaded after several attempts. Please try again in a few minutes.'
         }
       };
     case 'GEMINI_RATE_LIMITED':
@@ -67,6 +67,14 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         body: {
           code,
           message: 'The AI service returned an unexpected response. Please try again.'
+        }
+      };
+    case 'GEMINI_INVALID_REQUEST':
+      return {
+        status: 400,
+        body: {
+          code,
+          message: error.message || 'The AI service rejected this request. Try a different file or shorter input.'
         }
       };
     case 'INVALID_RESUME_FILE':
@@ -111,7 +119,7 @@ const analyzeResume = async (req, res) => {
       });
     }
 
-    console.log(`Uploaded file: ${req.file.originalname} saved at ${req.file.path}`);
+    console.log(`Uploaded resume: name="${req.file.originalname}" ext="${ext}" size=${req.file.size} bytes`);
 
     const ext = path.extname(req.file.originalname).toLowerCase();
     if (!['.pdf', '.doc', '.docx'].includes(ext)) {
@@ -141,8 +149,8 @@ const analyzeResume = async (req, res) => {
       return res.status(mapped.status).json(mapped.body);
     }
 
-    // 2. Analyze text using Gemini Service
-    console.log('Sending resume text to Gemini AI parser...');
+    // 2. Analyze text using Gemini Service (log size only, never contents)
+    console.log(`Sending resume to Gemini AI parser: ${resumeText.length} chars...`);
     if (!resumeText || !resumeText.trim()) {
       cleanupUploadedFile(req.file.path);
       return res.status(400).json({
@@ -154,6 +162,7 @@ const analyzeResume = async (req, res) => {
     let analysisResult;
     try {
       analysisResult = await analyzeResumeWithAI(resumeText);
+      console.log(`Resume analysis succeeded: score=${analysisResult.resumeScore}`);
     } catch (err) {
       // Do not persist anything or return fake analysis when Gemini fails.
       cleanupUploadedFile(req.file.path);
@@ -230,7 +239,9 @@ const analyzeResume = async (req, res) => {
 
     res.json(analysisDoc);
   } catch (error) {
-    console.error('Analyze resume controller error:', error.code || error.message);
+    console.error(
+      `Analyze resume controller error: code=${error.code || 'UNKNOWN'} status=${error.status || 500} attempts=${error.attempts || 1}`
+    );
     if (req.file?.path) cleanupUploadedFile(req.file.path);
     const mapped = mapAIErrorToResponse(error, 'Internal Server Error');
     res.status(mapped.status).json(mapped.body);

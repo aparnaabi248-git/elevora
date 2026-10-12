@@ -1,14 +1,18 @@
-const { getGeminiClient, getGeminiModelName } = require('../config/gemini');
+const { getGeminiClient, getGeminiModelName, getGeminiFallbackModelName } = require('../config/gemini');
 const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
 
+// Bounded retry budget: max 3 total attempts per AI call (including any
+// fallback-model attempt). Sleeps total at most 1s + 2s = 3s so serverless
+// functions stay well within Vercel's default ~10s (Hobby) request limit
+// when combined with typical Gemini latencies.
 const MAX_GEMINI_ATTEMPTS = 3;
-const RETRY_BASE_DELAY_MS = 1000;
+const RETRY_DELAYS_MS = [1000, 2000];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const getGeminiModel = (systemInstruction) => {
+const getGeminiModel = (systemInstruction, modelName) => {
   const genAI = getGeminiClient();
   if (!genAI) {
     const error = new Error(
@@ -20,14 +24,43 @@ const getGeminiModel = (systemInstruction) => {
   }
 
   return genAI.getGenerativeModel({
-    model: getGeminiModelName(),
+    model: modelName || getGeminiModelName(),
     ...(systemInstruction ? { systemInstruction } : {})
   });
 };
 
+const hasKeyProblem = (lower) =>
+  lower.includes('api key not valid') ||
+  lower.includes('api_key_invalid') ||
+  lower.includes('invalid api key') ||
+  lower.includes('api key is invalid') ||
+  lower.includes('permission_denied') ||
+  lower.includes('key not found') ||
+  lower.includes('unauthenticated');
+
+const hasModelProblem = (lower) =>
+  lower.includes('model not found') ||
+  (lower.includes('models/') && lower.includes('not found')) ||
+  lower.includes('unsupported model') ||
+  lower.includes('model is not supported') ||
+  (lower.includes('model') &&
+    (lower.includes('not supported') ||
+      lower.includes('does not exist') ||
+      lower.includes('is not found')));
+
+const hasInvalidRequestProblem = (lower) =>
+  lower.includes('invalid argument') ||
+  lower.includes('invalid request') ||
+  lower.includes('bad request') ||
+  lower.includes('safety') ||
+  lower.includes('blocked') ||
+  lower.includes('prompt') && lower.includes('invalid');
+
 /**
  * Normalize heterogeneous Gemini SDK / HTTP errors into a stable shape:
  * { status, code, retryable, message }
+ * Only transient 503/500/502/504 and 429 failures are retryable.
+ * Auth, model, request-validation, and parse errors never retry.
  */
 const classifyGeminiError = (error) => {
   const status =
@@ -41,33 +74,8 @@ const classifyGeminiError = (error) => {
   );
   const lower = rawMessage.toLowerCase();
 
-  // Invalid / missing API key (never include the key itself in messages).
-  if (
-    status === 400 ||
-    status === 401 ||
-    status === 403 ||
-    lower.includes('api key not valid') ||
-    lower.includes('api_key_invalid') ||
-    lower.includes('invalid api key') ||
-    lower.includes('api key is invalid') ||
-    lower.includes('permission_denied') ||
-    lower.includes('key not found')
-  ) {
-    // Distinguish "model not found" (404) from auth errors first below.
-    if (
-      lower.includes('model') &&
-      (lower.includes('not found') ||
-        lower.includes('not supported') ||
-        lower.includes('does not exist') ||
-        lower.includes('is not found'))
-    ) {
-      return {
-        status: 500,
-        code: 'GEMINI_MODEL_NOT_FOUND',
-        retryable: false,
-        message: `The configured Gemini model "${getGeminiModelName()}" is unsupported or not found. Check the GEMINI_MODEL environment variable.`
-      };
-    }
+  // Invalid / missing API key — never retried (never include the key in messages).
+  if (status === 401 || status === 403 || hasKeyProblem(lower)) {
     return {
       status: 500,
       code: 'GEMINI_AUTH',
@@ -77,14 +85,8 @@ const classifyGeminiError = (error) => {
     };
   }
 
-  // Unsupported / unknown model.
-  if (
-    status === 404 ||
-    lower.includes('model not found') ||
-    lower.includes('models/') && lower.includes('not found') ||
-    lower.includes('unsupported model') ||
-    lower.includes('model is not supported')
-  ) {
+  // Unsupported / unknown model — never retried (a retry cannot fix config).
+  if (status === 404 || hasModelProblem(lower)) {
     return {
       status: 500,
       code: 'GEMINI_MODEL_NOT_FOUND',
@@ -93,7 +95,18 @@ const classifyGeminiError = (error) => {
     };
   }
 
-  // Rate limiting — retryable, but surfaced distinctly from 503.
+  // Invalid request (bad prompt args, safety blocks) — never retried.
+  if (status === 400 || hasInvalidRequestProblem(lower)) {
+    return {
+      status: 400,
+      code: 'GEMINI_INVALID_REQUEST',
+      retryable: false,
+      message:
+        'The AI service rejected this request. Try a different file or shorter input.'
+    };
+  }
+
+  // Rate limiting — transient, retryable, surfaced distinctly from 503.
   if (
     status === 429 ||
     lower.includes('rate limit') ||
@@ -110,7 +123,7 @@ const classifyGeminiError = (error) => {
     };
   }
 
-  // Overloaded / unavailable — the reported 503 case. Retryable.
+  // Overloaded / transient server errors (503/500/502/504) — retryable.
   if (
     status === 503 ||
     status === 500 ||
@@ -120,14 +133,15 @@ const classifyGeminiError = (error) => {
     lower.includes('service unavailable') ||
     lower.includes('overloaded') ||
     lower.includes('high demand') ||
-    lower.includes('temporarily unavailable')
+    lower.includes('temporarily unavailable') ||
+    lower.includes('internal error')
   ) {
     return {
       status: 503,
       code: 'GEMINI_OVERLOADED',
       retryable: true,
       message:
-        'The AI service is temporarily overloaded. Please try again in a moment.'
+        'The AI service is still overloaded after several attempts. Please try again in a few minutes.'
     };
   }
 
@@ -142,9 +156,17 @@ const classifyGeminiError = (error) => {
 const isRetryableGeminiError = (error) => classifyGeminiError(error).retryable;
 
 /**
- * Run a Gemini call with exponential backoff.
- * Retries temporary 503/429-style failures up to MAX_GEMINI_ATTEMPTS times.
- * Non-retryable errors (bad key, bad model, invalid file) throw immediately.
+ * Run a Gemini call with bounded exponential backoff (max 3 attempts,
+ * ~1s then ~2s delays, 3s total sleep).
+ *
+ * NOTE: the @google/generative-ai SDK (v0.11.x) performs a single fetch per
+ * generateContent/sendMessage call with no built-in retry, so this
+ * application-level retry does not duplicate SDK retries.
+ *
+ * Only transient failures (503/500/502/504 overload, 429 rate-limit) retry.
+ * Auth, model, invalid-request, and parse errors throw immediately.
+ * Diagnostic logs include attempt counts, status, and code only — never API
+ * keys or prompt/response contents.
  */
 const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
   let lastError;
@@ -160,12 +182,15 @@ const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
       error.code = classified.code;
 
       if (!classified.retryable || attempt === MAX_GEMINI_ATTEMPTS) {
+        console.error(
+          `${operationName} failed: code=${classified.code} status=${classified.status} attempts=${attempt}/${MAX_GEMINI_ATTEMPTS}`
+        );
         break;
       }
 
-      const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+      const delayMs = RETRY_DELAYS_MS[attempt - 1] || 2000;
       console.warn(
-        `${operationName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS} failed (${classified.code}). Retrying in ${delayMs}ms...`
+        `${operationName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS} failed (code=${classified.code} status=${classified.status}). Retrying in ${delayMs}ms...`
       );
       await sleep(delayMs);
     }
@@ -175,6 +200,66 @@ const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
   const finalError = new Error(classified.message);
   finalError.status = classified.status;
   finalError.code = classified.code;
+  finalError.attempts = MAX_GEMINI_ATTEMPTS;
+  finalError.cause = lastError;
+  throw finalError;
+};
+
+/**
+ * Resume-analysis call with a fallback model. Total budget stays at
+ * MAX_GEMINI_ATTEMPTS attempts: the first attempts use the primary model and
+ * the final attempt uses GEMINI_FALLBACK_MODEL — but only when the failure is
+ * a retryable service error (overload/rate-limit). Non-retryable failures
+ * (bad key, bad model, invalid request) never touch the fallback.
+ * Never returns fabricated analysis; throws when every attempt fails.
+ */
+const withGeminiRetryAndFallback = async (operationFactory, operationName = 'Gemini request') => {
+  const primary = getGeminiModelName();
+  const fallback = getGeminiFallbackModelName();
+  const plan = fallback ? [primary, primary, fallback] : [primary, primary, primary];
+
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
+    const modelName = plan[attempt - 1];
+    try {
+      if (attempt > 1 || modelName !== primary) {
+        console.warn(
+          `${operationName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS} using model "${modelName}"...`
+        );
+      }
+      const result = await operationFactory(modelName)();
+      if (attempt > 1) {
+        console.log(`${operationName} succeeded on attempt ${attempt} with model "${modelName}".`);
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      const classified = classifyGeminiError(error);
+      error.status = classified.status;
+      error.code = classified.code;
+
+      if (!classified.retryable || attempt === MAX_GEMINI_ATTEMPTS) {
+        console.error(
+          `${operationName} failed: code=${classified.code} status=${classified.status} attempts=${attempt}/${MAX_GEMINI_ATTEMPTS} models=[${[...new Set(plan.slice(0, attempt))].join(', ')}]`
+        );
+        break;
+      }
+
+      const delayMs = RETRY_DELAYS_MS[attempt - 1] || 2000;
+      const nextModel = plan[attempt];
+      console.warn(
+        `${operationName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS} failed (code=${classified.code} status=${classified.status} model="${modelName}"). Retrying in ${delayMs}ms with model "${nextModel}"...`
+      );
+      await sleep(delayMs);
+    }
+  }
+
+  const classified = classifyGeminiError(lastError);
+  const finalError = new Error(classified.message);
+  finalError.status = classified.status;
+  finalError.code = classified.code;
+  finalError.attempts = MAX_GEMINI_ATTEMPTS;
+  finalError.modelsTried = [...new Set(plan)];
   finalError.cause = lastError;
   throw finalError;
 };
@@ -324,8 +409,12 @@ const analyzeResumeWithAI = async (resumeText) => {
   `;
 
   try {
-    return await withGeminiRetry(async () => {
-      const model = getGeminiModel();
+    // Log input size only — never resume contents or API keys.
+    console.log(
+      `Gemini resume analysis: input=${resumeText.length} chars, primary model="${getGeminiModelName()}"`
+    );
+    return await withGeminiRetryAndFallback((modelName) => async () => {
+      const model = getGeminiModel(undefined, modelName);
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const analysis = parseJsonResponse(response.text());
@@ -356,7 +445,9 @@ const analyzeResumeWithAI = async (resumeText) => {
     }, 'Gemini resume analysis');
   } catch (error) {
     // Preserve already-classified errors (with code/status); do not fabricate results.
-    console.error('Gemini resume analysis failed:', error.code || error.message);
+    console.error(
+      `Gemini resume analysis failed: code=${error.code} status=${error.status} attempts=${error.attempts || 1} models=${(error.modelsTried || [getGeminiModelName()]).join(', ')}`
+    );
     if (!error.status) error.status = 502;
     if (!error.code) error.code = 'GEMINI_FAILED';
     throw error;
@@ -556,5 +647,7 @@ module.exports = {
   classifyGeminiError,
   isRetryableGeminiError,
   withGeminiRetry,
-  MAX_GEMINI_ATTEMPTS
+  withGeminiRetryAndFallback,
+  MAX_GEMINI_ATTEMPTS,
+  RETRY_DELAYS_MS
 };
