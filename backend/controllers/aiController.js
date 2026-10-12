@@ -240,7 +240,7 @@ const analyzeResume = async (req, res) => {
     res.json(analysisDoc);
   } catch (error) {
     console.error(
-      `Analyze resume controller error: code=${error.code || 'UNKNOWN'} status=${error.status || 500} attempts=${error.attempts || 1}`
+      `Analyze resume controller error: code=${error.code || 'UNKNOWN'} status=${error.status || 500} upstream=${error.upstreamStatus ?? '?'} attempts=${error.attempts || 1}`
     );
     if (req.file?.path) cleanupUploadedFile(req.file.path);
     const mapped = mapAIErrorToResponse(error, 'Internal Server Error');

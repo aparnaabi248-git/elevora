@@ -1,15 +1,15 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Default to a currently supported Gemini flash model.
-// Override with the GEMINI_MODEL environment variable when needed.
-// NOTE: "gemini-3.6-flash" is not a valid/supported model and overloads with 503,
-// so it must not be used as the default.
-const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+// Primary model: live-verified (Oct 2026) against the public Gemini v1beta
+// API with this project's SDK. Override with GEMINI_MODEL when needed.
+// Retired IDs such as "gemini-2.0-flash"/"gemini-1.5-flash" now return
+// HTTP 404 and must not be used.
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 
-// Second supported model, tried only when the primary model fails with a
+// Second live-verified model, tried only when the primary model fails with a
 // retryable service error (overload/rate-limit). Override with
 // GEMINI_FALLBACK_MODEL. Never fabricated analysis — if both fail, we throw.
-const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-1.5-flash';
+const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash-lite';
 
 const getGeminiModelName = () => {
   const configured = process.env.GEMINI_MODEL?.trim();

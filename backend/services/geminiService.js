@@ -12,6 +12,20 @@ const RETRY_DELAYS_MS = [1000, 2000];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Extract safe server-side diagnostics from a raw SDK error: the actual
+ * upstream HTTP status plus a truncated upstream message snippet.
+ * Safe to log: the SDK sends the API key in the `x-goog-api-key` header
+ * (never in the URL), so error text contains only the model URL, the HTTP
+ * status, and the API's error message. Never prompts, responses, or keys.
+ */
+const safeUpstreamDetail = (error) => {
+  const upstreamStatus =
+    error?.status ?? error?.response?.status ?? error?.statusCode ?? null;
+  const snippet = String(error?.message || error).slice(0, 200);
+  return { upstreamStatus, snippet };
+};
+
 const getGeminiModel = (systemInstruction, modelName) => {
   const genAI = getGeminiClient();
   if (!genAI) {
@@ -176,14 +190,19 @@ const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
     } catch (error) {
       lastError = error;
       const classified = classifyGeminiError(error);
+      const { upstreamStatus } = safeUpstreamDetail(error);
+      if (upstreamStatus != null && error.upstreamStatus == null) {
+        error.upstreamStatus = upstreamStatus;
+      }
 
       // Attach normalized fields so controllers can map status/code/messages.
       error.status = classified.status;
       error.code = classified.code;
 
       if (!classified.retryable || attempt === MAX_GEMINI_ATTEMPTS) {
+        const { snippet } = safeUpstreamDetail(lastError);
         console.error(
-          `${operationName} failed: code=${classified.code} status=${classified.status} attempts=${attempt}/${MAX_GEMINI_ATTEMPTS}`
+          `${operationName} failed: code=${classified.code} status=${classified.status} upstream=${error.upstreamStatus ?? '?'} attempts=${attempt}/${MAX_GEMINI_ATTEMPTS} upstreamMsg="${snippet}"`
         );
         break;
       }
@@ -201,6 +220,7 @@ const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
   finalError.status = classified.status;
   finalError.code = classified.code;
   finalError.attempts = MAX_GEMINI_ATTEMPTS;
+  if (lastError?.upstreamStatus != null) finalError.upstreamStatus = lastError.upstreamStatus;
   finalError.cause = lastError;
   throw finalError;
 };
@@ -235,12 +255,17 @@ const withGeminiRetryAndFallback = async (operationFactory, operationName = 'Gem
     } catch (error) {
       lastError = error;
       const classified = classifyGeminiError(error);
+      const { upstreamStatus } = safeUpstreamDetail(error);
+      if (upstreamStatus != null && error.upstreamStatus == null) {
+        error.upstreamStatus = upstreamStatus;
+      }
       error.status = classified.status;
       error.code = classified.code;
 
       if (!classified.retryable || attempt === MAX_GEMINI_ATTEMPTS) {
+        const { snippet } = safeUpstreamDetail(lastError);
         console.error(
-          `${operationName} failed: code=${classified.code} status=${classified.status} attempts=${attempt}/${MAX_GEMINI_ATTEMPTS} models=[${[...new Set(plan.slice(0, attempt))].join(', ')}]`
+          `${operationName} failed: code=${classified.code} status=${classified.status} upstream=${error.upstreamStatus ?? '?'} attempts=${attempt}/${MAX_GEMINI_ATTEMPTS} models=[${[...new Set(plan.slice(0, attempt))].join(', ')}] upstreamMsg="${snippet}"`
         );
         break;
       }
@@ -260,6 +285,7 @@ const withGeminiRetryAndFallback = async (operationFactory, operationName = 'Gem
   finalError.code = classified.code;
   finalError.attempts = MAX_GEMINI_ATTEMPTS;
   finalError.modelsTried = [...new Set(plan)];
+  if (lastError?.upstreamStatus != null) finalError.upstreamStatus = lastError.upstreamStatus;
   finalError.cause = lastError;
   throw finalError;
 };
