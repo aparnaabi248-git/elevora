@@ -1,0 +1,309 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-brand-primary: #6D5CE8;
+  --color-brand-secondary: #5141C8;
+  --color-brand-accent: #A99CFF;
+  --color-success: #10B981;
+  --color-error: #EF4444;
+  --color-bg: #F8FAFC;
+  --color-card: #FFFFFF;
+  --color-text: #0F172A;
+  --color-card-text: #0F172A;
+  --color-border: #DDD8FF;
+  
+  --font-sans: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+
+  --color-indigo-50: #F5F3FF;
+  --color-indigo-100: #EDE9FE;
+  --color-indigo-200: #DDD6FE;
+  --color-indigo-300: #C4B5FD;
+  --color-indigo-400: #A78BFA;
+  --color-indigo-500: #7C6AE8;
+  --color-indigo-550: #6D5CE8;
+  --color-indigo-600: #5B4ACB;
+  --color-indigo-650: #5141C8;
+  --color-indigo-700: #43369B;
+  --color-indigo-800: #31276E;
+  --color-indigo-900: #211B4B;
+  --color-indigo-950: #171335;
+
+  --color-amber-50: #FFFBEB;
+  --color-amber-100: #FEF3C7;
+  --color-amber-200: #FDE68A;
+  --color-amber-300: #FCD34D;
+  --color-amber-400: #FBBF24;
+  --color-amber-500: #F59E0B;
+  --color-amber-600: #D97706;
+  --color-amber-700: #B45309;
+  --color-amber-800: #92400E;
+  --color-amber-900: #78350F;
+
+  --color-slate-50: #F8FAFC;
+  --color-slate-100: #F1F5F9;
+  --color-slate-200: #E2E8F0;
+  --color-slate-300: #CBD5E1;
+  --color-slate-400: #94A3B8;
+  --color-slate-500: #64748B;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1E293B;
+  --color-slate-900: #0F172A;
+  --color-slate-950: #020617;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(109, 92, 232, 0.06);
+}
+.dark ::-webkit-scrollbar-track {
+  background: rgba(169, 156, 255, 0.12);
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #A99CFF 0%, #6D5CE8 100%);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #7C6AE8 0%, #5141C8 100%);
+}
+
+/* Soft analytics cards with a violet career-intelligence accent. */
+.glass-effect {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(124, 106, 232, 0.16);
+  box-shadow: 0 10px 30px 0 rgba(49, 39, 110, 0.07);
+}
+
+.dark .glass-effect {
+  background: rgba(34, 29, 72, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(169, 156, 255, 0.2);
+  box-shadow: 0 10px 35px 0 rgba(0, 0, 0, 0.4);
+}
+
+.glass-navbar {
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(124, 106, 232, 0.14);
+}
+
+.dark .glass-navbar {
+  background: rgba(27, 23, 57, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(169, 156, 255, 0.18);
+}
+
+.glass-input {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(124, 106, 232, 0.22);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dark .glass-input {
+  background: rgba(34, 29, 72, 0.88);
+  border: 1px solid rgba(169, 156, 255, 0.24);
+}
+
+.glass-input:focus {
+  background: rgba(255, 255, 255, 1);
+  border-color: rgba(109, 92, 232, 0.72);
+  box-shadow: 0 0 0 3px rgba(109, 92, 232, 0.15);
+  outline: none;
+}
+
+.dark .glass-input:focus {
+  background: rgba(34, 29, 72, 0.98);
+  border-color: rgba(169, 156, 255, 0.8);
+  box-shadow: 0 0 0 3px rgba(169, 156, 255, 0.18);
+}
+
+/* Pale lavender surface in light mode, ink violet in dark mode. */
+.animated-mesh-bg {
+  background-color: var(--color-bg);
+  background-image: 
+    radial-gradient(at 20% 15%, color-mix(in srgb, #A99CFF 18%, transparent) 0px, transparent 40%),
+    radial-gradient(at 80% 25%, color-mix(in srgb, #D8D1FF 30%, transparent) 0px, transparent 42%),
+    radial-gradient(at 50% 90%, color-mix(in srgb, #8D7AF0 10%, transparent) 0px, transparent 48%);
+  background-size: 100% 100%;
+  transition: background-color 0.5s cubic-bezier(0.4, 0, 0.2, 1), background-image 0.5s cubic-bezier(0.4, 0, 0.2, 1), color 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dark .animated-mesh-bg {
+  background-color: #17152F;
+  background-image: 
+    radial-gradient(at 10% 10%, color-mix(in srgb, #5141C8 30%, transparent) 0px, transparent 40%),
+    radial-gradient(at 90% 20%, color-mix(in srgb, #A99CFF 18%, transparent) 0px, transparent 42%),
+    radial-gradient(at 50% 90%, color-mix(in srgb, #43369B 24%, transparent) 0px, transparent 45%);
+}
+
+/* Base Body Styles */
+body {
+  font-family: var(--font-sans);
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+.dark {
+  --color-bg: #17152F;
+  --color-card: #221D48;
+  --color-text: #F4F1FF;
+  --color-card-text: #F4F1FF;
+  --color-border: #786BC1;
+}
+
+.dark body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* Keep shared page headings and subtitles readable in both themes. */
+.page-heading-white,
+.profile-heading {
+  color: var(--color-text);
+}
+
+.page-subtitle-white {
+  color: #475569;
+}
+
+.dark .page-subtitle-white {
+  color: #CBD5E1;
+}
+
+.dashboard-hero .page-heading-white {
+  color: #FFFFFF;
+}
+
+/* Custom Animations */
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Brand-colored utility overrides used by legacy indigo buttons and links. */
+.bg-gradient-to-r.from-indigo-500.to-cyan-500,
+.bg-gradient-to-tr.from-indigo-500.to-cyan-500 {
+  background-image: linear-gradient(135deg, #7C6AE8 0%, #5141C8 100%) !important;
+  color: #FFFFFF !important;
+}
+
+.bg-indigo-500 {
+  background-color: #6D5CE8 !important;
+  color: #FFFFFF !important;
+}
+
+.hover\:bg-indigo-650:hover {
+  background-color: #5141C8 !important;
+}
+
+.text-indigo-500 {
+  color: #6D5CE8 !important;
+}
+
+.hover\:text-indigo-500:hover {
+  color: #5141C8 !important;
+}
+
+.shadow-indigo-500\/25 {
+  --tw-shadow-color: rgba(109, 92, 232, 0.2) !important;
+}
+
+.shadow-indigo-500\/30 {
+  --tw-shadow-color: rgba(109, 92, 232, 0.24) !important;
+}
+
+.shadow-indigo-500\/35 {
+  --tw-shadow-color: rgba(109, 92, 232, 0.28) !important;
+}
+
+.shadow-indigo-500\/20 {
+  --tw-shadow-color: rgba(109, 92, 232, 0.16) !important;
+}
+
+.shadow-indigo-500\/40 {
+  --tw-shadow-color: rgba(109, 92, 232, 0.32) !important;
+}
+
+/* Deep violet navigation anchors the analytics-style dashboard shell. */
+.sidebar-menu {
+  background: #211B4B;
+  border-color: rgba(221, 214, 254, 0.14) !important;
+  color: #F4F1FF;
+}
+
+.sidebar-menu .sidebar-heading {
+  color: #BDB5E8;
+}
+
+.sidebar-menu .sidebar-link {
+  color: #D9D4F0;
+}
+
+.sidebar-menu .sidebar-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+}
+
+.sidebar-menu .sidebar-link.active-nav-item {
+  background: #F0EDFF;
+  border-left-color: #A99CFF;
+  color: #43369B !important;
+}
+
+.sidebar-menu .border-t {
+  border-color: rgba(221, 214, 254, 0.16);
+}
+
+.sidebar-menu .text-slate-800,
+.sidebar-menu .dark\:text-slate-200 {
+  color: #F4F1FF;
+}
+
+.dark .sidebar-menu {
+  background: #15122F;
+}
+
+.dark .sidebar-menu .sidebar-link.active-nav-item {
+  background: rgba(169, 156, 255, 0.18);
+  border-left-color: #A99CFF;
+  color: #F4F1FF !important;
+}
+
+.active-nav-item {
+  background: #F0EDFF;
+  border-left: 4px solid #7C6AE8;
+  color: #43369B !important;
+}
+.dark .active-nav-item {
+  background: rgba(169, 156, 255, 0.18);
+  border-left: 4px solid #A99CFF;
+  color: #F4F1FF !important;
+}
