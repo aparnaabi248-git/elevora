@@ -3,22 +3,18 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Use /tmp on Vercel and the uploads folder locally
+// Vercel allows temporary uploads in /tmp.
+// Locally, use the project's uploads folder.
 const uploadDir = process.env.VERCEL
   ? '/tmp/elevora-uploads'
   : path.join(__dirname, '../uploads');
 
-// Create the directory if it does not exist
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+fs.mkdirSync(uploadDir, { recursive: true });
 
-// Configure file storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
   },
-
   filename: (req, file, cb) => {
     const uniqueSuffix =
       Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -30,7 +26,6 @@ const storage = multer.diskStorage({
   }
 });
 
-// Allow only PDF, DOC, and DOCX files
 const fileFilter = (req, file, cb) => {
   const allowedExtensions = ['.pdf', '.doc', '.docx'];
   const ext = path.extname(file.originalname).toLowerCase();
@@ -38,20 +33,12 @@ const fileFilter = (req, file, cb) => {
   if (allowedExtensions.includes(ext)) {
     cb(null, true);
   } else {
-    cb(
-      new Error('Invalid file type. Only PDF, DOC, and DOCX are allowed.'),
-      false
-    );
+    cb(new Error('Only PDF, DOC, and DOCX files are allowed.'), false);
   }
 };
 
-// Configure Multer
-const upload = multer({
+module.exports = multer({
   storage,
   fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10 MB limit
-  }
+  limits: { fileSize: 10 * 1024 * 1024 }
 });
-
-module.exports = upload;
