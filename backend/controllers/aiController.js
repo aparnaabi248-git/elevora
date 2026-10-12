@@ -53,6 +53,14 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
           message: error.message || 'The configured AI model is unsupported. Please contact support.'
         }
       };
+    case 'GEMINI_MODEL_MISCONFIGURED':
+      return {
+        status: 500,
+        body: {
+          code,
+          message: 'The AI model is misconfigured on the server. Please contact support.'
+        }
+      };
     case 'GEMINI_NOT_CONFIGURED':
       return {
         status: 500,

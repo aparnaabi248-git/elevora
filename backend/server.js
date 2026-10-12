@@ -18,9 +18,15 @@ dotenv.config();
 // Safe boot diagnostic: model names only, never keys or user data.
 // On Vercel this reveals exactly which model ID is in effect, distinguishing
 // a GEMINI_MODEL/GEMINI_FALLBACK_MODEL env override from the code defaults.
-console.log(
-  `Gemini models configured: primary="${getGeminiModelName()}" fallback="${getGeminiFallbackModelName() || 'none'}"`
-);
+// Wrapped defensively: an invalid env value must never crash server boot,
+// and the raw value is never printed (it could hold a pasted secret).
+let geminiBootInfo;
+try {
+  geminiBootInfo = `primary="${getGeminiModelName()}" fallback="${getGeminiFallbackModelName() || 'none'}"`;
+} catch (err) {
+  geminiBootInfo = `misconfigured (${err.code || 'INVALID'} — check GEMINI_MODEL/GEMINI_FALLBACK_MODEL; value withheld)`;
+}
+console.log(`Gemini models configured: ${geminiBootInfo}`);
 
 const app = express();
 

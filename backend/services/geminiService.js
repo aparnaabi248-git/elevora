@@ -77,6 +77,23 @@ const hasInvalidRequestProblem = (lower) =>
  * Auth, model, request-validation, and parse errors never retry.
  */
 const classifyGeminiError = (error) => {
+  // Errors our own code already classified (thrown before any network call,
+  // e.g. misconfiguration, missing key, bad parse): trust the attached code.
+  // This also stops them being mistaken for transient overload (status 500).
+  const ownCode = typeof error?.code === 'string' ? error.code : null;
+  if (
+    ownCode === 'GEMINI_MODEL_MISCONFIGURED' ||
+    ownCode === 'GEMINI_NOT_CONFIGURED' ||
+    ownCode === 'GEMINI_INVALID_RESPONSE'
+  ) {
+    return {
+      status: error?.status || 500,
+      code: ownCode,
+      retryable: false,
+      message: error?.message || 'AI service failed to generate a response. Please try again.'
+    };
+  }
+
   const status =
     error?.status ??
     error?.response?.status ??
@@ -100,12 +117,19 @@ const classifyGeminiError = (error) => {
   }
 
   // Unsupported / unknown model — never retried (a retry cannot fix config).
+  // The label never echoes raw env values (they could hold a pasted secret).
   if (status === 404 || hasModelProblem(lower)) {
+    let label;
+    try {
+      label = `"${getGeminiModelName()}"`;
+    } catch (labelError) {
+      label = '(misconfigured — check the GEMINI_MODEL environment variable)';
+    }
     return {
       status: 500,
       code: 'GEMINI_MODEL_NOT_FOUND',
       retryable: false,
-      message: `The configured Gemini model "${getGeminiModelName()}" is unsupported or not found. Check the GEMINI_MODEL environment variable.`
+      message: `The configured Gemini model ${label} is unsupported or not found. Check the GEMINI_MODEL environment variable.`
     };
   }
 

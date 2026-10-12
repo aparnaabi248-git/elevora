@@ -11,14 +11,47 @@ const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 // GEMINI_FALLBACK_MODEL. Never fabricated analysis — if both fail, we throw.
 const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash-lite';
 
+// Trim pasted values and strip a single layer of surrounding quotes, since
+// dashboard env editors often preserve them (a quoted ID would 404).
+const sanitizeModelName = (value) => {
+  let name = String(value || '').trim();
+  if (
+    name.length >= 2 &&
+    ((name.startsWith('"') && name.endsWith('"')) ||
+      (name.startsWith("'") && name.endsWith("'")))
+  ) {
+    name = name.slice(1, -1).trim();
+  }
+  return name;
+};
+
+// Heuristic for values that cannot be model IDs: pasted API keys/secrets.
+// Real model IDs are short and limited to [A-Za-z0-9_.-].
+const looksLikeSecret = (name) =>
+  /^AIza/i.test(name) || name.length > 64 || /[^A-Za-z0-9_.-]/.test(name);
+
+const misconfiguredModelError = (varName = 'GEMINI_MODEL') => {
+  const error = new Error(
+    `The AI model is misconfigured on the server (${varName}). Please contact support.`
+  );
+  error.status = 500;
+  error.code = 'GEMINI_MODEL_MISCONFIGURED';
+  return error;
+};
+
 const getGeminiModelName = () => {
-  const configured = process.env.GEMINI_MODEL?.trim();
-  return configured || DEFAULT_GEMINI_MODEL;
+  const configured = sanitizeModelName(process.env.GEMINI_MODEL);
+  if (!configured) return DEFAULT_GEMINI_MODEL;
+  // Fail fast on values that cannot be model IDs (pasted secrets, quoted
+  // blobs). Never log or transmit the raw value.
+  if (looksLikeSecret(configured)) throw misconfiguredModelError();
+  return configured;
 };
 
 const getGeminiFallbackModelName = () => {
-  const configured = process.env.GEMINI_FALLBACK_MODEL?.trim();
+  const configured = sanitizeModelName(process.env.GEMINI_FALLBACK_MODEL);
   const fallback = configured || DEFAULT_GEMINI_FALLBACK_MODEL;
+  if (looksLikeSecret(fallback)) throw misconfiguredModelError('GEMINI_FALLBACK_MODEL');
   // No fallback when it duplicates the primary model.
   return fallback === getGeminiModelName() ? null : fallback;
 };

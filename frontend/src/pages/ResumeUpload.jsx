@@ -25,6 +25,7 @@ const getFriendlyUploadError = (err) => {
     case 'GEMINI_NOT_CONFIGURED':
       return 'The AI service is currently misconfigured. Please try again later or contact support.';
     case 'GEMINI_MODEL_NOT_FOUND':
+    case 'GEMINI_MODEL_MISCONFIGURED':
       return 'The configured AI model is unsupported. Please contact support.';
     case 'GEMINI_INVALID_RESPONSE':
       return 'The AI service returned an unexpected response. Please try uploading again.';
