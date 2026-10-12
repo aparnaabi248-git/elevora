@@ -10,9 +10,17 @@ const dotenv = require('dotenv');
 
 const connectDB = require('./config/db');
 const initCron = require('./cron/jobCron');
+const { getGeminiModelName, getGeminiFallbackModelName } = require('./config/gemini');
 
 // Load environment variables for local development
 dotenv.config();
+
+// Safe boot diagnostic: model names only, never keys or user data.
+// On Vercel this reveals exactly which model ID is in effect, distinguishing
+// a GEMINI_MODEL/GEMINI_FALLBACK_MODEL env override from the code defaults.
+console.log(
+  `Gemini models configured: primary="${getGeminiModelName()}" fallback="${getGeminiFallbackModelName() || 'none'}"`
+);
 
 const app = express();
 
