@@ -208,7 +208,9 @@ const isRetryableGeminiError = (error) => classifyGeminiError(error).retryable;
  */
 const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
   let lastError;
+  let attemptsMade = 0;
   for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
+    attemptsMade = attempt;
     try {
       return await operation();
     } catch (error) {
@@ -243,7 +245,7 @@ const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
   const finalError = new Error(classified.message);
   finalError.status = classified.status;
   finalError.code = classified.code;
-  finalError.attempts = MAX_GEMINI_ATTEMPTS;
+  finalError.attempts = attemptsMade;
   if (lastError?.upstreamStatus != null) finalError.upstreamStatus = lastError.upstreamStatus;
   finalError.cause = lastError;
   throw finalError;

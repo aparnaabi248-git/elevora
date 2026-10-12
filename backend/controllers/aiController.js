@@ -85,12 +85,28 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
           message: error.message || 'The AI service rejected this request. Try a different file or shorter input.'
         }
       };
+    case 'ANALYSIS_SAVE_FAILED':
+      return {
+        status: 500,
+        body: {
+          code,
+          message: error.message || 'Your resume was analyzed but the result could not be saved. Please try again.'
+        }
+      };
     case 'INVALID_RESUME_FILE':
       return {
         status: 400,
         body: {
           code,
           message: error.message || 'Invalid resume file. Please upload a valid PDF or DOCX resume.'
+        }
+      };
+    case 'NOT_FOUND':
+      return {
+        status: 404,
+        body: {
+          code,
+          message: error.message || 'Requested resource not found.'
         }
       };
     default:
@@ -127,9 +143,10 @@ const analyzeResume = async (req, res) => {
       });
     }
 
+    const ext = path.extname(req.file.originalname).toLowerCase();
+
     console.log(`Uploaded resume: name="${req.file.originalname}" ext="${ext}" size=${req.file.size} bytes`);
 
-    const ext = path.extname(req.file.originalname).toLowerCase();
     if (!['.pdf', '.doc', '.docx'].includes(ext)) {
       cleanupUploadedFile(req.file.path);
       return res.status(400).json({
@@ -186,69 +203,93 @@ const analyzeResume = async (req, res) => {
     // 3. Create serving URL reference for resume file
     const resumeUrl = `/uploads/${req.file.filename}`;
 
-    // 4. Update or Create ResumeAnalysis entry in DB
-    const analysisDoc = await ResumeAnalysis.findOneAndUpdate(
-      { user: req.user._id },
-      {
-        user: req.user._id,
-        resumeUrl,
-        extractedInfo: analysisResult.extractedInfo,
-        resumeScore: analysisResult.resumeScore,
-        feedback: analysisResult.feedback,
-        careerSuggestions: analysisResult.careerSuggestions,
-        learningRoadmap: analysisResult.learningRoadmap
-      },
-      { new: true, upsert: true, runValidators: true }
-    );
+    // 4-6. Persist the analysis and update the profile. Database failures
+    // are handled separately from Gemini/file errors so the true cause is
+    // never masked as an AI failure (or vice versa). Never fabricate data:
+    // on save failure we return an error, not a fake analysis.
+    try {
+      // 4. Update or Create ResumeAnalysis entry in DB
+      const analysisDoc = await ResumeAnalysis.findOneAndUpdate(
+        { user: req.user._id },
+        {
+          user: req.user._id,
+          resumeUrl,
+          extractedInfo: analysisResult.extractedInfo,
+          resumeScore: analysisResult.resumeScore,
+          feedback: analysisResult.feedback,
+          careerSuggestions: analysisResult.careerSuggestions,
+          learningRoadmap: analysisResult.learningRoadmap
+        },
+        { new: true, upsert: true, runValidators: true }
+      );
 
-    // 5. Update user skills, resume URL, resume score, and profile completion
-    const user = await User.findById(req.user._id);
-    user.resumeUrl = resumeUrl;
-    user.resumeScore = analysisResult.resumeScore;
+      // 5. Update user skills, resume URL, resume score, and profile completion
+      const user = await User.findById(req.user._id);
+      if (!user) {
+        return res.status(404).json({
+          code: 'NOT_FOUND',
+          message: 'User account not found. Please log in again.'
+        });
+      }
+      user.resumeUrl = resumeUrl;
+      user.resumeScore = analysisResult.resumeScore;
 
-    // Merge extracted skills into student profile if there are new ones
-    if (analysisResult.extractedInfo && analysisResult.extractedInfo.skills) {
-      const mergedSkills = new Set([...user.skills, ...analysisResult.extractedInfo.skills]);
-      user.skills = Array.from(mergedSkills);
+      // Merge extracted skills into student profile if there are new ones
+      if (analysisResult.extractedInfo && analysisResult.extractedInfo.skills) {
+        const mergedSkills = new Set([...(user.skills || []), ...analysisResult.extractedInfo.skills]);
+        user.skills = Array.from(mergedSkills);
+      }
+
+      // Merge extracted education if empty
+      if ((user.education || []).length === 0 && analysisResult.extractedInfo.education) {
+        user.education = analysisResult.extractedInfo.education
+          .filter(ed => ed.school?.trim() && ed.degree?.trim() && ed.fieldOfStudy?.trim())
+          .map(ed => ({
+            school: ed.school,
+            degree: ed.degree,
+            fieldOfStudy: ed.fieldOfStudy
+          }));
+      }
+
+      // Merge extracted experience if empty
+      if ((user.experience || []).length === 0 && analysisResult.extractedInfo.experience) {
+        user.experience = analysisResult.extractedInfo.experience
+          .filter(exp => exp.company?.trim() && exp.role?.trim())
+          .map(exp => ({
+            company: exp.company,
+            role: exp.role,
+            description: exp.description || ''
+          }));
+      }
+
+      user.calculateProfileCompletion();
+      await user.save();
+
+      // 6. Create success notification
+      await Notification.create({
+        recipient: req.user._id,
+        title: 'Resume Analyzed Successfully!',
+        message: `Your resume scored ${analysisResult.resumeScore}/100. We have updated your profile skills and generated a career roadmap.`,
+        type: 'success'
+      });
+
+      res.json(analysisDoc);
+    } catch (dbError) {
+      // Safe diagnostic: error name + truncated message only (no resume
+      // text, keys, or headers — DB errors carry none of those).
+      console.error(
+        `Resume analysis save failed: name=${dbError?.name || 'Error'} code=${dbError?.code || 'none'} msg="${String(dbError?.message || dbError).slice(0, 200)}"`
+      );
+      return res.status(500).json({
+        code: 'ANALYSIS_SAVE_FAILED',
+        message: 'Your resume was analyzed but the result could not be saved. Please try again.'
+      });
     }
-
-    // Merge extracted education if empty
-    if (user.education.length === 0 && analysisResult.extractedInfo.education) {
-      user.education = analysisResult.extractedInfo.education
-        .filter(ed => ed.school?.trim() && ed.degree?.trim() && ed.fieldOfStudy?.trim())
-        .map(ed => ({
-          school: ed.school,
-          degree: ed.degree,
-          fieldOfStudy: ed.fieldOfStudy
-        }));
-    }
-
-    // Merge extracted experience if empty
-    if (user.experience.length === 0 && analysisResult.extractedInfo.experience) {
-      user.experience = analysisResult.extractedInfo.experience
-        .filter(exp => exp.company?.trim() && exp.role?.trim())
-        .map(exp => ({
-          company: exp.company,
-          role: exp.role,
-          description: exp.description || ''
-        }));
-    }
-
-    user.calculateProfileCompletion();
-    await user.save();
-
-    // 6. Create success notification
-    await Notification.create({
-      recipient: req.user._id,
-      title: 'Resume Analyzed Successfully!',
-      message: `Your resume scored ${analysisResult.resumeScore}/100. We have updated your profile skills and generated a career roadmap.`,
-      type: 'success'
-    });
-
-    res.json(analysisDoc);
   } catch (error) {
+    // Catch-all for anything escaping the phased handling above. Logs the
+    // original error identity so it can never become an anonymous UNKNOWN.
     console.error(
-      `Analyze resume controller error: code=${error.code || 'UNKNOWN'} status=${error.status || 500} upstream=${error.upstreamStatus ?? '?'} attempts=${error.attempts || 1}`
+      `Analyze resume controller error: name=${error?.name || 'Error'} code=${error.code || 'UNKNOWN'} status=${error.status || 500} upstream=${error.upstreamStatus ?? '?'} attempts=${error.attempts || 1} msg="${String(error?.message || error).slice(0, 200)}"`
     );
     if (req.file?.path) cleanupUploadedFile(req.file.path);
     const mapped = mapAIErrorToResponse(error, 'Internal Server Error');

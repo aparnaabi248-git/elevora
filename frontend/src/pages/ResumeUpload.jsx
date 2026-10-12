@@ -29,6 +29,8 @@ const getFriendlyUploadError = (err) => {
       return 'The configured AI model is unsupported. Please contact support.';
     case 'GEMINI_INVALID_RESPONSE':
       return 'The AI service returned an unexpected response. Please try uploading again.';
+    case 'ANALYSIS_SAVE_FAILED':
+      return 'Your resume was analyzed but the result could not be saved. Please try again.';
     case 'INVALID_RESUME_FILE':
       return serverMessage || 'Invalid resume file. Please upload a valid PDF or DOCX resume.';
     default:
