@@ -1,13 +1,101 @@
+const fs = require('fs');
+const path = require('path');
 const ResumeAnalysis = require('../models/ResumeAnalysis');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const {
-  extractTextFromPDF,
+  extractTextFromResumeFile,
   analyzeResumeWithAI,
   getAIChatResponse,
   getAIInterviewQuestions,
   getAICoverLetter
 } = require('../services/geminiService');
+
+/**
+ * Map a service error (which carries .status/.code) to a user-friendly
+ * JSON response. Never leak raw SDK errors or API keys to the client,
+ * and never fabricate analysis data when Gemini fails.
+ */
+const mapAIErrorToResponse = (error, fallbackMessage) => {
+  const code = error.code || 'AI_FAILED';
+  const status = error.status || 500;
+
+  switch (code) {
+    case 'GEMINI_OVERLOADED':
+      return {
+        status: 503,
+        body: {
+          code,
+          message: 'The AI service is temporarily overloaded. Please try again in a moment.'
+        }
+      };
+    case 'GEMINI_RATE_LIMITED':
+      return {
+        status: 429,
+        body: {
+          code,
+          message: 'Too many AI requests right now. Please wait a minute and try again.'
+        }
+      };
+    case 'GEMINI_AUTH':
+      return {
+        status: 500,
+        body: {
+          code,
+          message: 'The AI service is misconfigured (invalid API key). Please contact support.'
+        }
+      };
+    case 'GEMINI_MODEL_NOT_FOUND':
+      return {
+        status: 500,
+        body: {
+          code,
+          message: error.message || 'The configured AI model is unsupported. Please contact support.'
+        }
+      };
+    case 'GEMINI_NOT_CONFIGURED':
+      return {
+        status: 500,
+        body: {
+          code,
+          message: 'The AI service is not configured. Please contact support.'
+        }
+      };
+    case 'GEMINI_INVALID_RESPONSE':
+      return {
+        status: 502,
+        body: {
+          code,
+          message: 'The AI service returned an unexpected response. Please try again.'
+        }
+      };
+    case 'INVALID_RESUME_FILE':
+      return {
+        status: 400,
+        body: {
+          code,
+          message: error.message || 'Invalid resume file. Please upload a valid PDF or DOCX resume.'
+        }
+      };
+    default:
+      return {
+        status,
+        body: {
+          code,
+          message: fallbackMessage || 'AI service failed to process this request. Please try again.'
+        }
+      };
+  }
+};
+
+const cleanupUploadedFile = (filePath) => {
+  if (!filePath) return;
+  fs.unlink(filePath, (err) => {
+    if (err && err.code !== 'ENOENT') {
+      console.error(`Failed to clean up temp upload ${filePath}:`, err.message);
+    }
+  });
+};
 
 /**
  * @desc    Upload and analyze resume
@@ -17,28 +105,68 @@ const {
 const analyzeResume = async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ message: 'Please upload a PDF resume file' });
+      return res.status(400).json({
+        code: 'INVALID_RESUME_FILE',
+        message: 'Please upload a PDF, DOC, or DOCX resume file.'
+      });
     }
 
     console.log(`Uploaded file: ${req.file.originalname} saved at ${req.file.path}`);
-    
-    // 1. Extract text from PDF
+
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    if (!['.pdf', '.doc', '.docx'].includes(ext)) {
+      cleanupUploadedFile(req.file.path);
+      return res.status(400).json({
+        code: 'INVALID_RESUME_FILE',
+        message: 'Only PDF, DOC, and DOCX files are allowed. Please upload a valid resume file.'
+      });
+    }
+
+    // Legacy .doc has no reliable serverless parser — fail fast with guidance.
+    if (ext === '.doc') {
+      cleanupUploadedFile(req.file.path);
+      return res.status(400).json({
+        code: 'INVALID_RESUME_FILE',
+        message: 'Legacy .doc files are not supported. Please convert your resume to PDF or DOCX and upload again.'
+      });
+    }
+
+    // 1. Extract text from the uploaded resume (PDF/DOCX/TXT dispatch).
     let resumeText = '';
     try {
-      resumeText = await extractTextFromPDF(req.file.path);
+      resumeText = await extractTextFromResumeFile(req.file.path, req.file.originalname);
     } catch (err) {
-      return res.status(400).json({ message: 'Could not extract text from this PDF file. Make sure it is not corrupted or scanned image only.' });
+      cleanupUploadedFile(req.file.path);
+      const mapped = mapAIErrorToResponse(err);
+      return res.status(mapped.status).json(mapped.body);
     }
 
     // 2. Analyze text using Gemini Service
     console.log('Sending resume text to Gemini AI parser...');
-    if (!resumeText.trim()) {
-      return res.status(400).json({ message: 'No readable text was found in this PDF resume.' });
+    if (!resumeText || !resumeText.trim()) {
+      cleanupUploadedFile(req.file.path);
+      return res.status(400).json({
+        code: 'INVALID_RESUME_FILE',
+        message: 'No readable text was found in this resume. If it is a scanned image, please upload a text-based PDF or DOCX.'
+      });
     }
-    const analysisResult = await analyzeResumeWithAI(resumeText);
 
-    // 3. Create serving URL for resume file
-    // Example: http://localhost:5000/uploads/file-123456.pdf
+    let analysisResult;
+    try {
+      analysisResult = await analyzeResumeWithAI(resumeText);
+    } catch (err) {
+      // Do not persist anything or return fake analysis when Gemini fails.
+      cleanupUploadedFile(req.file.path);
+      const mapped = mapAIErrorToResponse(err, 'AI service failed to analyze this resume. Please try again.');
+      return res.status(mapped.status).json(mapped.body);
+    }
+
+    // Temp file is no longer needed after successful extraction.
+    // The DB stores a /uploads/<filename> reference; on Vercel /tmp is
+    // ephemeral, so resumeUrl is best-effort and never required for analysis.
+    cleanupUploadedFile(req.file.path);
+
+    // 3. Create serving URL reference for resume file
     const resumeUrl = `/uploads/${req.file.filename}`;
 
     // 4. Update or Create ResumeAnalysis entry in DB
@@ -60,7 +188,7 @@ const analyzeResume = async (req, res) => {
     const user = await User.findById(req.user._id);
     user.resumeUrl = resumeUrl;
     user.resumeScore = analysisResult.resumeScore;
-    
+
     // Merge extracted skills into student profile if there are new ones
     if (analysisResult.extractedInfo && analysisResult.extractedInfo.skills) {
       const mergedSkills = new Set([...user.skills, ...analysisResult.extractedInfo.skills]);
@@ -102,15 +230,10 @@ const analyzeResume = async (req, res) => {
 
     res.json(analysisDoc);
   } catch (error) {
-    console.error('Analyze resume controller error:', error.message);
-    const status = error.status || 500;
-    res.status(status).json({
-      message: error.status === 503
-        ? error.message
-        : error.status === 502
-          ? 'AI service failed to analyze this resume. Please try again.'
-          : 'Internal Server Error'
-    });
+    console.error('Analyze resume controller error:', error.code || error.message);
+    if (req.file?.path) cleanupUploadedFile(req.file.path);
+    const mapped = mapAIErrorToResponse(error, 'Internal Server Error');
+    res.status(mapped.status).json(mapped.body);
   }
 };
 
@@ -124,17 +247,15 @@ const chatWithMentor = async (req, res) => {
 
   try {
     if (!message) {
-      return res.status(400).json({ message: 'Please provide a message' });
+      return res.status(400).json({ code: 'INVALID_REQUEST', message: 'Please provide a message' });
     }
 
     const aiResponse = await getAIChatResponse(history, message);
     res.json({ response: aiResponse });
   } catch (error) {
-    console.error('Chat controller error:', error.message);
-    const status = error.status || 502;
-    res.status(status).json({
-      message: error.status === 503 ? error.message : 'AI service failed to generate a response. Please try again.'
-    });
+    console.error('Chat controller error:', error.code || error.message);
+    const mapped = mapAIErrorToResponse(error, 'AI service failed to generate a response. Please try again.');
+    res.status(mapped.status).json(mapped.body);
   }
 };
 
@@ -148,7 +269,7 @@ const getInterviewQuestions = async (req, res) => {
 
   try {
     if (!jobTitle || !jobDescription) {
-      return res.status(400).json({ message: 'Please provide jobTitle and jobDescription' });
+      return res.status(400).json({ code: 'INVALID_REQUEST', message: 'Please provide jobTitle and jobDescription' });
     }
 
     const user = await User.findById(req.user._id);
@@ -158,11 +279,9 @@ const getInterviewQuestions = async (req, res) => {
     const questions = await getAIInterviewQuestions(jobTitle, jobDescription, skills);
     res.json(questions);
   } catch (error) {
-    console.error('Interview prep controller error:', error.message);
-    const status = error.status || 502;
-    res.status(status).json({
-      message: error.status === 503 ? error.message : 'AI service failed to generate a response. Please try again.'
-    });
+    console.error('Interview prep controller error:', error.code || error.message);
+    const mapped = mapAIErrorToResponse(error, 'AI service failed to generate a response. Please try again.');
+    res.status(mapped.status).json(mapped.body);
   }
 };
 
@@ -176,7 +295,7 @@ const generateCoverLetter = async (req, res) => {
 
   try {
     if (!jobTitle || !companyName || !jobDescription) {
-      return res.status(400).json({ message: 'Please provide jobTitle, companyName and jobDescription' });
+      return res.status(400).json({ code: 'INVALID_REQUEST', message: 'Please provide jobTitle, companyName and jobDescription' });
     }
 
     const user = await User.findById(req.user._id);
@@ -191,11 +310,9 @@ const generateCoverLetter = async (req, res) => {
     const coverLetter = await getAICoverLetter(jobTitle, companyName, jobDescription, studentProfile);
     res.json({ coverLetter });
   } catch (error) {
-    console.error('Cover letter controller error:', error.message);
-    const status = error.status || 502;
-    res.status(status).json({
-      message: error.status === 503 ? error.message : 'AI service failed to generate a response. Please try again.'
-    });
+    console.error('Cover letter controller error:', error.code || error.message);
+    const mapped = mapAIErrorToResponse(error, 'AI service failed to generate a response. Please try again.');
+    res.status(mapped.status).json(mapped.body);
   }
 };
 
@@ -208,12 +325,12 @@ const getResumeAnalysis = async (req, res) => {
   try {
     const analysis = await ResumeAnalysis.findOne({ user: req.user._id });
     if (!analysis) {
-      return res.status(404).json({ message: 'No resume analysis found. Please upload your resume first.' });
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'No resume analysis found. Please upload your resume first.' });
     }
     res.json(analysis);
   } catch (error) {
     console.error('Get resume analysis error:', error.message);
-    res.status(500).json({ message: 'Internal Server Error' });
+    res.status(500).json({ code: 'INTERNAL_ERROR', message: 'Internal Server Error' });
   }
 };
 
@@ -222,5 +339,6 @@ module.exports = {
   chatWithMentor,
   getInterviewQuestions,
   generateCoverLetter,
-  getResumeAnalysis
+  getResumeAnalysis,
+  mapAIErrorToResponse
 };

@@ -3,6 +3,43 @@ import { Upload, FileText, CheckCircle, Sparkles, BookOpen, AlertCircle, ArrowRi
 import API from '../services/api';
 import GlassCard from '../components/GlassCard';
 
+const MAX_RESUME_BYTES = 10 * 1024 * 1024;
+const ACCEPTED_EXTENSIONS = ['.pdf', '.docx'];
+const ACCEPT_ATTR = '.pdf,.docx';
+
+const getFriendlyUploadError = (err) => {
+  const status = err?.response?.status;
+  const code = err?.response?.data?.code;
+  const serverMessage = err?.response?.data?.message;
+
+  if (err?.code === 'ECONNABORTED' || /timeout/i.test(err?.message || '')) {
+    return 'Analysis is taking longer than expected (the AI service may be busy). Please try again in a moment.';
+  }
+
+  switch (code) {
+    case 'GEMINI_OVERLOADED':
+      return 'The AI service is temporarily overloaded. Please wait a moment and try again.';
+    case 'GEMINI_RATE_LIMITED':
+      return 'Too many AI requests right now. Please wait a minute and try again.';
+    case 'GEMINI_AUTH':
+    case 'GEMINI_NOT_CONFIGURED':
+      return 'The AI service is currently misconfigured. Please try again later or contact support.';
+    case 'GEMINI_MODEL_NOT_FOUND':
+      return 'The configured AI model is unsupported. Please contact support.';
+    case 'GEMINI_INVALID_RESPONSE':
+      return 'The AI service returned an unexpected response. Please try uploading again.';
+    case 'INVALID_RESUME_FILE':
+      return serverMessage || 'Invalid resume file. Please upload a valid PDF or DOCX resume.';
+    default:
+      break;
+  }
+
+  if (status === 503) return 'The AI service is temporarily overloaded. Please try again in a moment.';
+  if (status === 429) return 'Too many requests right now. Please wait a minute and try again.';
+  if (status === 400) return serverMessage || 'Invalid resume file. Please upload a valid PDF or DOCX resume.';
+  return serverMessage || 'Resume upload or analysis failed. Try again.';
+};
+
 const ResumeUpload = () => {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -26,35 +63,44 @@ const ResumeUpload = () => {
   const handleFileChange = (e) => {
     setError('');
     const selectedFile = e.target.files[0];
-    if (selectedFile) {
-      if (selectedFile.type !== 'application/pdf') {
-        setError('Only PDF files are currently supported.');
-        return;
-      }
-      setFile(selectedFile);
+    if (!selectedFile) return;
+
+    const lowerName = selectedFile.name.toLowerCase();
+    const hasValidExtension = ACCEPTED_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+    if (!hasValidExtension) {
+      setError('Only PDF and DOCX resumes are supported. Legacy .doc files must be converted first.');
+      return;
     }
+    if (selectedFile.size > MAX_RESUME_BYTES) {
+      setError('Resume file is too large. Please upload a file smaller than 10MB.');
+      return;
+    }
+    setFile(selectedFile);
   };
 
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!file) {
-      setError('Please select a PDF file first.');
+      setError('Please select a PDF or DOCX file first.');
       return;
     }
 
     setLoading(true);
     setError('');
-    
+
     const formData = new FormData();
     formData.append('resume', file);
 
     try {
+      // AI analysis with retries/backoff can exceed the default 30s API
+      // timeout, so allow up to 120s for this request only.
       const response = await API.post('/ai/analyze-resume', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120000
       });
       setAnalysis(response.data);
     } catch (err) {
-      setError(err.response?.data?.message || 'Resume upload or analysis failed. Try again.');
+      setError(getFriendlyUploadError(err));
     } finally {
       setLoading(false);
     }
@@ -81,16 +127,16 @@ const ResumeUpload = () => {
               <div className="border-2 border-dashed border-slate-200/60 dark:border-slate-800/80 rounded-2xl p-8 hover:border-indigo-500/50 dark:hover:border-indigo-500/50 transition cursor-pointer relative group">
                 <input
                   type="file"
-                  accept=".pdf"
+                  accept={ACCEPT_ATTR}
                   onChange={handleFileChange}
                   className="absolute inset-0 opacity-0 cursor-pointer"
                 />
                 <Upload className="w-10 h-10 text-slate-400 group-hover:text-indigo-500 transition mx-auto mb-3" />
                 <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
-                  {file ? file.name : 'Select PDF Resume'}
+                  {file ? file.name : 'Select PDF or DOCX Resume'}
                 </span>
                 <span className="text-[10px] text-slate-400 mt-1 block">
-                  Drag and drop or click to browse
+                  Drag and drop or click to browse (max 10MB)
                 </span>
               </div>
 
@@ -151,7 +197,7 @@ const ResumeUpload = () => {
                     <span className="text-[9px] uppercase tracking-wider block font-bold text-slate-450">Score</span>
                   </div>
                 </div>
-                
+
                 <div className="space-y-2 text-center sm:text-left">
                   <div className="flex items-center justify-center sm:justify-start gap-1 text-indigo-500 font-bold text-sm">
                     <CheckCircle className="w-4 h-4" />

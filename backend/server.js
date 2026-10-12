@@ -4,6 +4,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const os = require('os');
+const fs = require('fs');
 const dotenv = require('dotenv');
 
 const connectDB = require('./config/db');
@@ -38,11 +40,18 @@ const apiLimiter = rateLimit({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Upload directory: temporary storage on Vercel,
-// regular uploads folder during local development
+// Upload directory: writable temp storage on Vercel (os.tmpdir()),
+// regular uploads folder during local development. Never rely on
+// persistent local files in serverless — uploads are transient.
 const uploadDir = process.env.VERCEL
-  ? '/tmp/elevora-uploads'
+  ? path.join(os.tmpdir(), 'elevora-uploads')
   : path.join(__dirname, 'uploads');
+
+try {
+  fs.mkdirSync(uploadDir, { recursive: true });
+} catch (error) {
+  console.error('Could not create upload directory:', error.message);
+}
 
 // Serve uploaded files
 app.use('/uploads', express.static(uploadDir));
@@ -78,7 +87,15 @@ app.get('/api/health', (req, res) => {
 app.use((err, req, res, next) => {
   console.error(err.stack || err.message);
 
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      code: 'INVALID_RESUME_FILE',
+      message: 'Resume file is too large. Please upload a file smaller than 10MB.'
+    });
+  }
+
   res.status(err.status || 500).json({
+    code: err.code || 'INTERNAL_ERROR',
     message: err.message || 'Internal Server Error',
     error:
       process.env.NODE_ENV === 'development'
