@@ -13,6 +13,37 @@ const RETRY_DELAYS_MS = [1000, 2000];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Per-attempt cap for a single Gemini call. The SDK's fetch has no timeout of
+ * its own, so a hung upstream call would otherwise hang the serverless
+ * function until the platform kills it (opaque 500, zero diagnostics).
+ * Override with GEMINI_REQUEST_TIMEOUT_MS (clamped to 120s).
+ */
+const getGeminiTimeoutMs = () => {
+  const parsed = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS);
+  if (Number.isFinite(parsed) && parsed > 0) return Math.min(parsed, 120000);
+  return 25000;
+};
+
+const runWithGeminiTimeout = (promise, operationName) => {
+  const timeoutMs = getGeminiTimeoutMs();
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(
+        `${operationName} timed out after ${timeoutMs}ms waiting for the AI service.`
+      );
+      error.status = 503;
+      error.code = 'GEMINI_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+  // Swallow the loser's late rejection so a timed-out fetch that fails
+  // afterwards cannot surface as an unhandled rejection.
+  promise.catch(() => {});
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
+
+/**
  * Extract safe server-side diagnostics from a raw SDK error: the actual
  * upstream HTTP status plus a truncated upstream message snippet.
  * Safe to log: the SDK sends the API key in the `x-goog-api-key` header
@@ -212,7 +243,7 @@ const withGeminiRetry = async (operation, operationName = 'Gemini request') => {
   for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt += 1) {
     attemptsMade = attempt;
     try {
-      return await operation();
+      return await runWithGeminiTimeout(operation(), operationName);
     } catch (error) {
       lastError = error;
       const classified = classifyGeminiError(error);
@@ -273,7 +304,7 @@ const withGeminiRetryAndFallback = async (operationFactory, operationName = 'Gem
           `${operationName} attempt ${attempt}/${MAX_GEMINI_ATTEMPTS} using model "${modelName}"...`
         );
       }
-      const result = await operationFactory(modelName)();
+      const result = await runWithGeminiTimeout(operationFactory(modelName)(), operationName);
       if (attempt > 1) {
         console.log(`${operationName} succeeded on attempt ${attempt} with model "${modelName}".`);
       }
@@ -700,6 +731,7 @@ module.exports = {
   isRetryableGeminiError,
   withGeminiRetry,
   withGeminiRetryAndFallback,
+  getGeminiTimeoutMs,
   MAX_GEMINI_ATTEMPTS,
   RETRY_DELAYS_MS
 };

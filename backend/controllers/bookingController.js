@@ -1,7 +1,7 @@
 const Booking = require('../models/Booking');
 const User = require('../models/User');
 const ResumeAnalysis = require('../models/ResumeAnalysis');
-const { getGeminiModel, formatGeminiHistory } = require('../services/geminiService');
+const { getGeminiModel, formatGeminiHistory, withGeminiRetry, classifyGeminiError } = require('../services/geminiService');
 
 // Hardcoded consultants list with real-time status metadata
 const consultantsList = [
@@ -204,23 +204,32 @@ const chatWithConsultant = async (req, res) => {
       `;
 
       try {
-        const model = getGeminiModel(systemInstruction);
-        const chat = model.startChat({ history: geminiHistory });
+        const reply = await withGeminiRetry(async () => {
+          const model = getGeminiModel(systemInstruction);
+          const chat = model.startChat({ history: geminiHistory });
 
-        const result = await chat.sendMessage(content);
-        const aiResponse = result.response.text();
+          const result = await chat.sendMessage(content);
+          const aiResponse = result.response.text();
+          if (!aiResponse || !aiResponse.trim()) {
+            const emptyError = new Error('The AI service returned an empty response. Please try again.');
+            emptyError.status = 502;
+            emptyError.code = 'GEMINI_INVALID_RESPONSE';
+            throw emptyError;
+          }
+          return aiResponse;
+        }, 'Consultancy mentor chat');
 
         booking.messages.push({
           sender: 'consultant',
-          content: aiResponse,
+          content: reply,
           timestamp: new Date()
         });
       } catch (geminiErr) {
-        console.error('Gemini call failed for booking chat:', geminiErr.message);
-        const error = new Error(geminiErr.status === 503
-          ? 'AI is temporarily busy. Please try again in a moment.'
-          : 'AI service failed to generate a response. Please try again.');
-        error.status = geminiErr.status || 502;
+        const classified = classifyGeminiError(geminiErr);
+        console.error(`Gemini call failed for booking chat: code=${classified.code} status=${classified.status} upstream=${geminiErr.upstreamStatus ?? '?'} attempts=${geminiErr.attempts || 1}`);
+        const error = new Error(classified.message);
+        error.status = classified.status;
+        error.code = classified.code;
         throw error;
       }
     } else {
@@ -242,14 +251,41 @@ const chatWithConsultant = async (req, res) => {
     await booking.save();
     res.json(booking);
   } catch (error) {
-    console.error('Error during consultancy chat:', error.message);
-    res.status(error.status || 500).json({
-      message: error.status === 503
-        ? 'AI is temporarily busy. Please try again in a moment.'
-        : error.status === 502
-          ? error.message
-          : 'Internal Server Error'
-    });
+    console.error(`Error during consultancy chat: name=${error?.name || 'Error'} code=${error.code || 'UNKNOWN'} status=${error.status || 500}`);
+    const status = error.status || 500;
+    const code = error.code;
+    let message;
+    switch (code) {
+      case 'GEMINI_OVERLOADED':
+        message = 'AI is temporarily busy. Please try again in a moment.';
+        break;
+      case 'GEMINI_RATE_LIMITED':
+        message = 'Too many AI requests right now. Please wait a minute and try again.';
+        break;
+      case 'GEMINI_AUTH':
+      case 'GEMINI_NOT_CONFIGURED':
+      case 'GEMINI_MODEL_MISCONFIGURED':
+        message = 'The AI service is misconfigured. Please contact support.';
+        break;
+      case 'GEMINI_MODEL_NOT_FOUND':
+        message = 'The configured AI model is unsupported. Please contact support.';
+        break;
+      case 'GEMINI_INVALID_REQUEST':
+        message = 'The AI service rejected this request. Please try a shorter message.';
+        break;
+      case 'GEMINI_INVALID_RESPONSE':
+        message = 'The AI service returned an unexpected response. Please try again.';
+        break;
+      default:
+        message = status === 503
+          ? 'AI is temporarily busy. Please try again in a moment.'
+          : status === 502
+            ? error.message || 'AI service failed to generate a response. Please try again.'
+            : 'Internal Server Error';
+    }
+    const body = { message };
+    if (code) body.code = code;
+    res.status(status).json(body);
   }
 };
 

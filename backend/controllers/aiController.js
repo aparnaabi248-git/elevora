@@ -334,6 +334,9 @@ const getInterviewQuestions = async (req, res) => {
     }
 
     const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'User account not found. Please log in again.' });
+    }
     const skills = user.skills || [];
 
     console.log(`Generating interview questions for job: "${jobTitle}"`);
@@ -360,6 +363,9 @@ const generateCoverLetter = async (req, res) => {
     }
 
     const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'User account not found. Please log in again.' });
+    }
     const studentProfile = {
       name: user.name,
       skills: user.skills || [],
