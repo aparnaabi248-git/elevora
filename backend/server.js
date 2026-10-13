@@ -78,7 +78,7 @@ app.use('/api/ai', aiRateLimiter, require('./routes/aiRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/companies', require('./routes/companyRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
-app.use('/api/bookings', require('./routes/bookingRoutes'));
+app.use('/api/bookings', aiRateLimiter, require('./routes/bookingRoutes'));
 
 // Root route
 app.get('/', (req, res) => {

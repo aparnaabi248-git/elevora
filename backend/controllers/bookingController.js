@@ -1,7 +1,8 @@
 const Booking = require('../models/Booking');
 const User = require('../models/User');
 const ResumeAnalysis = require('../models/ResumeAnalysis');
-const { getGeminiModel, formatGeminiHistory, withGeminiRetry, classifyGeminiError } = require('../services/geminiService');
+const { getGeminiModel, formatGeminiHistory, withGeminiRetryAndFallback, classifyGeminiError } = require('../services/geminiService');
+const { mapAIErrorToResponse } = require('./aiController');
 
 // Hardcoded consultants list with real-time status metadata
 const consultantsList = [
@@ -204,8 +205,8 @@ const chatWithConsultant = async (req, res) => {
       `;
 
       try {
-        const reply = await withGeminiRetry(async () => {
-          const model = getGeminiModel(systemInstruction);
+        const reply = await withGeminiRetryAndFallback((modelName) => async () => {
+          const model = getGeminiModel(systemInstruction, modelName);
           const chat = model.startChat({ history: geminiHistory });
 
           const result = await chat.sendMessage(content);
@@ -217,7 +218,7 @@ const chatWithConsultant = async (req, res) => {
             throw emptyError;
           }
           return aiResponse;
-        }, 'Consultancy mentor chat');
+        }, 'Consultancy mentor chat', true);
 
         booking.messages.push({
           sender: 'consultant',
@@ -230,6 +231,7 @@ const chatWithConsultant = async (req, res) => {
         const error = new Error(classified.message);
         error.status = classified.status;
         error.code = classified.code;
+        error.retryAfterMs = classified.retryAfterMs;
         throw error;
       }
     } else {
@@ -252,40 +254,11 @@ const chatWithConsultant = async (req, res) => {
     res.json(booking);
   } catch (error) {
     console.error(`Error during consultancy chat: name=${error?.name || 'Error'} code=${error.code || 'UNKNOWN'} status=${error.status || 500}`);
-    const status = error.status || 500;
-    const code = error.code;
-    let message;
-    switch (code) {
-      case 'GEMINI_OVERLOADED':
-        message = 'AI is temporarily busy. Please try again in a moment.';
-        break;
-      case 'GEMINI_RATE_LIMITED':
-        message = 'Too many AI requests right now. Please wait a minute and try again.';
-        break;
-      case 'GEMINI_AUTH':
-      case 'GEMINI_NOT_CONFIGURED':
-      case 'GEMINI_MODEL_MISCONFIGURED':
-        message = 'The AI service is misconfigured. Please contact support.';
-        break;
-      case 'GEMINI_MODEL_NOT_FOUND':
-        message = 'The configured AI model is unsupported. Please contact support.';
-        break;
-      case 'GEMINI_INVALID_REQUEST':
-        message = 'The AI service rejected this request. Please try a shorter message.';
-        break;
-      case 'GEMINI_INVALID_RESPONSE':
-        message = 'The AI service returned an unexpected response. Please try again.';
-        break;
-      default:
-        message = status === 503
-          ? 'AI is temporarily busy. Please try again in a moment.'
-          : status === 502
-            ? error.message || 'AI service failed to generate a response. Please try again.'
-            : 'Internal Server Error';
+    const mapped = mapAIErrorToResponse(error, 'AI service failed to generate a response. Please try again.');
+    if (mapped.retryAfter) {
+      res.set('Retry-After', String(mapped.retryAfter));
     }
-    const body = { message };
-    if (code) body.code = code;
-    res.status(status).json(body);
+    res.status(mapped.status).json(mapped.body);
   }
 };
 

@@ -335,10 +335,35 @@ const CareerConsultancy = () => {
       }
     } catch (err) {
       console.error('Chat error:', err.message);
-      const errorMessage = err.response?.data?.message ||
-        (err.code === 'ECONNABORTED'
-          ? 'The AI response took too long. Please try again with a shorter message.'
-          : 'Could not send your message. Please check your connection and try again.');
+      const code = err.response?.data?.code;
+      const serverMessage = err.response?.data?.message;
+      const retryAfter = err.retryAfterSeconds || err.response?.data?.retryAfter;
+
+      let errorMessage;
+      if (err.code === 'ECONNABORTED' || /timeout/i.test(err?.message || '')) {
+        errorMessage = 'The AI response took too long. Please try again with a shorter message.';
+      } else if (code === 'GEMINI_RATE_LIMITED' || code === 'AI_RATE_LIMITED') {
+        errorMessage = retryAfter
+          ? `Too many requests — please wait ${retryAfter} seconds and try again.`
+          : 'Too many AI requests right now. Please wait a minute and try again.';
+      } else if (code === 'GEMINI_AUTH' || code === 'GEMINI_NOT_CONFIGURED' || code === 'GEMINI_MODEL_MISCONFIGURED') {
+        errorMessage = 'The AI service is currently misconfigured. Please contact support.';
+      } else if (code === 'GEMINI_MODEL_NOT_FOUND') {
+        errorMessage = 'The configured AI model is unsupported. Please contact support.';
+      } else if (code === 'GEMINI_OVERLOADED' || code === 'GEMINI_TIMEOUT') {
+        errorMessage = 'The AI service is temporarily overloaded. Please try again in a few minutes.';
+      } else if (code === 'GEMINI_INVALID_REQUEST') {
+        errorMessage = 'The AI service rejected this request. Try a shorter or different message.';
+      } else if (code === 'GEMINI_INVALID_RESPONSE') {
+        errorMessage = 'The AI returned an unexpected response. Please try again.';
+      } else if (serverMessage) {
+        errorMessage = serverMessage;
+      } else if (!err.response) {
+        errorMessage = 'Could not reach the server. Please check your connection and try again.';
+      } else {
+        errorMessage = 'AI service failed to respond. Please try again.';
+      }
+
       setChatMessages(prev => [
         ...prev,
         { sender: 'consultant', content: errorMessage, timestamp: new Date() }
