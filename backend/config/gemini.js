@@ -25,6 +25,21 @@ const sanitizeModelName = (value) => {
   return name;
 };
 
+// Sanitize API key: trim whitespace and strip a single layer of surrounding
+// quotes. Dashboard editors and .env files sometimes introduce these, causing
+// an otherwise-valid key to be rejected as API_KEY_INVALID.
+const sanitizeApiKey = (value) => {
+  let key = String(value || '').trim();
+  if (
+    key.length >= 2 &&
+    ((key.startsWith('"') && key.endsWith('"')) ||
+      (key.startsWith("'") && key.endsWith("'")))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  return key;
+};
+
 // Heuristic for values that cannot be model IDs: pasted API keys/secrets.
 // Real model IDs are short and limited to [A-Za-z0-9_.-].
 const looksLikeSecret = (name) =>
@@ -63,7 +78,7 @@ const getGeminiClient = () => {
   // always pick up the current environment. Never log the key itself.
   if (genAI) return genAI;
 
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  const apiKey = sanitizeApiKey(process.env.GEMINI_API_KEY);
   if (!apiKey) {
     console.warn(
       'GEMINI_API_KEY is not defined in the environment variables. AI features will be unavailable.'
@@ -86,11 +101,46 @@ const resetGeminiClient = () => {
   genAI = null;
 };
 
+/**
+ * Boot-time diagnostic: validates configuration and returns a summary object.
+ * Never logs or returns the actual API key value.
+ */
+const validateGeminiConfig = () => {
+  const result = {
+    apiKeySet: false,
+    primaryModel: null,
+    fallbackModel: null,
+    errors: []
+  };
+
+  const apiKey = sanitizeApiKey(process.env.GEMINI_API_KEY);
+  result.apiKeySet = !!apiKey;
+  if (!apiKey) {
+    result.errors.push('GEMINI_API_KEY is not set — all AI features will fail.');
+  }
+
+  try {
+    result.primaryModel = getGeminiModelName();
+  } catch (err) {
+    result.errors.push(`Primary model misconfigured: ${err.code || err.message}`);
+  }
+
+  try {
+    result.fallbackModel = getGeminiFallbackModelName();
+  } catch (err) {
+    result.errors.push(`Fallback model misconfigured: ${err.code || err.message}`);
+  }
+
+  return result;
+};
+
 module.exports = {
   getGeminiClient,
   getGeminiModelName,
   getGeminiFallbackModelName,
   resetGeminiClient,
+  validateGeminiConfig,
+  sanitizeApiKey,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_GEMINI_FALLBACK_MODEL
 };

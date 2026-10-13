@@ -10,23 +10,22 @@ const dotenv = require('dotenv');
 
 const connectDB = require('./config/db');
 const initCron = require('./cron/jobCron');
-const { getGeminiModelName, getGeminiFallbackModelName } = require('./config/gemini');
+const { validateGeminiConfig } = require('./config/gemini');
+const aiRateLimiter = require('./middleware/aiRateLimiter');
 
 // Load environment variables for local development
 dotenv.config();
 
-// Safe boot diagnostic: model names only, never keys or user data.
-// On Vercel this reveals exactly which model ID is in effect, distinguishing
-// a GEMINI_MODEL/GEMINI_FALLBACK_MODEL env override from the code defaults.
-// Wrapped defensively: an invalid env value must never crash server boot,
-// and the raw value is never printed (it could hold a pasted secret).
-let geminiBootInfo;
-try {
-  geminiBootInfo = `primary="${getGeminiModelName()}" fallback="${getGeminiFallbackModelName() || 'none'}"`;
-} catch (err) {
-  geminiBootInfo = `misconfigured (${err.code || 'INVALID'} — check GEMINI_MODEL/GEMINI_FALLBACK_MODEL; value withheld)`;
+// Safe boot diagnostic: model names and API key presence only, never the
+// actual key value or user data. On Vercel this reveals exactly which model
+// ID is in effect and whether the API key environment variable is set.
+const geminiConfig = validateGeminiConfig();
+console.log(
+  `Gemini config: apiKeySet=${geminiConfig.apiKeySet} primary="${geminiConfig.primaryModel || 'ERROR'}" fallback="${geminiConfig.fallbackModel || 'none'}"`
+);
+if (geminiConfig.errors.length > 0) {
+  console.warn('Gemini config warnings:', geminiConfig.errors.join('; '));
 }
-console.log(`Gemini models configured: ${geminiBootInfo}`);
 
 const app = express();
 
@@ -75,7 +74,7 @@ app.use('/api/auth', apiLimiter, require('./routes/authRoutes'));
 app.use('/api/profile', require('./routes/profileRoutes'));
 app.use('/api/jobs', require('./routes/jobRoutes'));
 app.use('/api/applications', require('./routes/applicationRoutes'));
-app.use('/api/ai', require('./routes/aiRoutes'));
+app.use('/api/ai', aiRateLimiter, require('./routes/aiRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/companies', require('./routes/companyRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));

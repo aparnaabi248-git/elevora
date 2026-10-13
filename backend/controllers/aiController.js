@@ -30,14 +30,20 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
           message: 'The AI service is still overloaded after several attempts. Please try again in a few minutes.'
         }
       };
-    case 'GEMINI_RATE_LIMITED':
+    case 'GEMINI_RATE_LIMITED': {
+      const retryAfter = normalizedError.retryAfterMs
+        ? Math.ceil(normalizedError.retryAfterMs / 1000)
+        : 60;
       return {
         status: 429,
+        retryAfter,
         body: {
           code,
-          message: 'Too many AI requests right now. Please wait a minute and try again.'
+          message: `Too many AI requests right now. Please wait ${retryAfter} seconds and try again.`,
+          retryAfter
         }
       };
+    }
     case 'GEMINI_AUTH':
       return {
         status: 500,
@@ -76,6 +82,14 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         body: {
           code,
           message: 'The AI service returned an unexpected response. Please try again.'
+        }
+      };
+    case 'GEMINI_TIMEOUT':
+      return {
+        status: 503,
+        body: {
+          code,
+          message: 'The AI service took too long to respond. Please try again.'
         }
       };
     case 'GEMINI_INVALID_REQUEST':
@@ -119,6 +133,17 @@ const mapAIErrorToResponse = (error, fallbackMessage) => {
         }
       };
   }
+};
+
+/**
+ * Send a mapped AI error response, including the Retry-After HTTP header
+ * when applicable (e.g. 429 rate-limit responses).
+ */
+const sendMappedError = (res, mapped) => {
+  if (mapped.retryAfter) {
+    res.set('Retry-After', String(mapped.retryAfter));
+  }
+  return res.status(mapped.status).json(mapped.body);
 };
 
 const cleanupUploadedFile = (filePath) => {
@@ -172,7 +197,7 @@ const analyzeResume = async (req, res) => {
     } catch (err) {
       cleanupUploadedFile(req.file.path);
       const mapped = mapAIErrorToResponse(err);
-      return res.status(mapped.status).json(mapped.body);
+      return sendMappedError(res, mapped);
     }
 
     // 2. Analyze text using Gemini Service (log size only, never contents)
@@ -193,7 +218,7 @@ const analyzeResume = async (req, res) => {
       // Do not persist anything or return fake analysis when Gemini fails.
       cleanupUploadedFile(req.file.path);
       const mapped = mapAIErrorToResponse(err, 'AI service failed to analyze this resume. Please try again.');
-      return res.status(mapped.status).json(mapped.body);
+      return sendMappedError(res, mapped);
     }
 
     // Temp file is no longer needed after successful extraction.
@@ -294,7 +319,7 @@ const analyzeResume = async (req, res) => {
     );
     if (req.file?.path) cleanupUploadedFile(req.file.path);
     const mapped = mapAIErrorToResponse(error, 'Internal Server Error');
-    res.status(mapped.status).json(mapped.body);
+    sendMappedError(res, mapped);
   }
 };
 
@@ -316,7 +341,7 @@ const chatWithMentor = async (req, res) => {
   } catch (error) {
     console.error('Chat controller error:', error.code || error.message);
     const mapped = mapAIErrorToResponse(error, 'AI service failed to generate a response. Please try again.');
-    res.status(mapped.status).json(mapped.body);
+    sendMappedError(res, mapped);
   }
 };
 
@@ -345,7 +370,7 @@ const getInterviewQuestions = async (req, res) => {
   } catch (error) {
     console.error('Interview prep controller error:', error.code || error.message);
     const mapped = mapAIErrorToResponse(error, 'AI service failed to generate a response. Please try again.');
-    res.status(mapped.status).json(mapped.body);
+    sendMappedError(res, mapped);
   }
 };
 
@@ -379,7 +404,7 @@ const generateCoverLetter = async (req, res) => {
   } catch (error) {
     console.error('Cover letter controller error:', error.code || error.message);
     const mapped = mapAIErrorToResponse(error, 'AI service failed to generate a response. Please try again.');
-    res.status(mapped.status).json(mapped.body);
+    sendMappedError(res, mapped);
   }
 };
 

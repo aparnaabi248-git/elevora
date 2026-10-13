@@ -74,7 +74,7 @@ const JobDetails = () => {
       });
       setCoverLetter(res.data.coverLetter || '');
     } catch (err) {
-      setErrorMsg('Failed to auto-generate cover letter via AI. Make sure you have filled in your profile experience.');
+      setErrorMsg(err.response?.data?.message || 'Failed to auto-generate cover letter via AI. Make sure you have filled in your profile experience.');
     } finally {
       setSubmitLoading(false);
     }
@@ -292,10 +292,11 @@ const JobDetails = () => {
                   <button
                     type="button"
                     onClick={handleGenerateCoverLetter}
-                    className="text-[10px] font-bold text-indigo-500 hover:text-indigo-650 flex items-center gap-0.5"
+                    disabled={submitLoading}
+                    className={`text-[10px] font-bold text-indigo-500 hover:text-indigo-650 flex items-center gap-0.5 ${submitLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     <Sparkles className="w-3 h-3 text-indigo-500 animate-spin" style={{ animationDuration: '3s' }} />
-                    <span>AI Auto-Generate</span>
+                    <span>{submitLoading ? 'Generating...' : 'AI Auto-Generate'}</span>
                   </button>
                 </div>
                 <textarea
